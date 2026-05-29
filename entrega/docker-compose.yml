@@ -1,0 +1,64 @@
+version: "3.8"
+
+services:
+  users:
+    build: ./users
+    ports:
+      - "${USERS_PORT:-5001}:5001"
+    environment:
+      PORT: 5001
+      JWT_SECRET: ${JWT_SECRET:-supersecret}
+    volumes:
+      - ./users/data:/app/data
+
+  products:
+    build: ./products
+    ports:
+      - "${PRODUCTS_PORT:-5002}:5002"
+    environment:
+      PORT: 5002
+      JWT_SECRET: ${JWT_SECRET:-supersecret}
+    volumes:
+      - ./products/data:/app/data
+
+  products-replica:
+    build: ./products-replica
+    ports:
+      - "${PRODUCTS_REPLICA_PORT:-5012}:5012"
+    environment:
+      PORT: 5012
+      JWT_SECRET: ${JWT_SECRET:-supersecret}
+    volumes:
+      - ./products/data:/app/data
+
+  orders:
+    build: ./orders
+    ports:
+      - "${ORDERS_PORT:-5003}:5003"
+    environment:
+      PORT: 5003
+      JWT_SECRET: ${JWT_SECRET:-supersecret}
+      USERS_URL: http://users:5001
+      PRODUCTS_URL: http://products:5002
+    volumes:
+      - ./orders/data:/app/data
+    depends_on:
+      - users
+      - products
+
+  gateway:
+    build: ./gateway
+    ports:
+      - "${GATEWAY_PORT:-3000}:3000"
+    environment:
+      PORT: 3000
+      JWT_SECRET: ${JWT_SECRET:-supersecret}
+      USERS_URL: http://users:5001
+      PRODUCTS_URL: http://products:5002
+      PRODUCTS_REPLICA_URL: http://products-replica:5012
+      ORDERS_URL: http://orders:5003
+    depends_on:
+      - users
+      - products
+      - products-replica
+      - orders
