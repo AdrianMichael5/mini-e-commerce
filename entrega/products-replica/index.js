@@ -11,15 +11,39 @@ const PORT = process.env.PORT || 5012;
 const INTERNAL_KEY = process.env.INTERNAL_KEY || "internalkey123";
 const PRODUCTS_FILE = path.join(__dirname, "data", "products.json");
 
+// ── Persistência ─────────────────────────────────────────────────────────────
+
+function ensureDataFile() {
+  const dir = path.dirname(PRODUCTS_FILE);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`[init] Diretório criado: ${dir}`);
+  }
+  if (!fs.existsSync(PRODUCTS_FILE)) {
+    fs.writeFileSync(PRODUCTS_FILE, "[]");
+    console.log(`[init] Arquivo criado: ${PRODUCTS_FILE}`);
+  }
+}
+
 function readProducts() {
-  return JSON.parse(fs.readFileSync(PRODUCTS_FILE, "utf-8"));
+  try {
+    return JSON.parse(fs.readFileSync(PRODUCTS_FILE, "utf-8"));
+  } catch (err) {
+    console.error("[storage] Erro ao ler products.json:", err.message);
+    return [];
+  }
 }
 
 function writeProducts(products) {
-  fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(products, null, 2));
+  try {
+    fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(products, null, 2));
+  } catch (err) {
+    console.error("[storage] Erro ao gravar products.json:", err.message);
+    throw err;
+  }
 }
 
-// ── Endpoints ──────────────────────────────────────────────────────────────
+// ── Endpoints ────────────────────────────────────────────────────────────────
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "products-replica" });
@@ -35,10 +59,11 @@ app.get("/products/:id", (req, res) => {
   res.json(product);
 });
 
-// Endpoint interno — recebe dados sincronizados da primária
+// Endpoint interno — recebe dados sincronizados da primária e valida INTERNAL_KEY
 app.post("/internal/sync", (req, res) => {
   const key = req.headers["x-internal-key"];
   if (key !== INTERNAL_KEY) {
+    console.warn("[internal-sync] Chave interna inválida recebida");
     return res.status(403).json({ error: "Chave interna inválida" });
   }
 
@@ -48,15 +73,21 @@ app.post("/internal/sync", (req, res) => {
   }
 
   const products = readProducts();
-  // Idempotente: ignora se já existe
   if (!products.find((p) => p.id === product.id)) {
     products.push(product);
     writeProducts(products);
+    console.log(`[internal-sync] Produto ${product.id} recebido e salvo (réplica)`);
+  } else {
+    console.log(`[internal-sync] Produto ${product.id} já existe — ignorado (idempotente)`);
   }
 
   res.json({ synced: true });
 });
 
+// ── Boot ──────────────────────────────────────────────────────────────────────
+
+ensureDataFile();
 app.listen(PORT, () => {
-  console.log(`Products REPLICA service running on port ${PORT}`);
+  console.log(`[boot] Products REPLICA service iniciado na porta ${PORT}`);
+  console.log(`[boot] INTERNAL_KEY configurada: ${INTERNAL_KEY !== "internalkey123" ? "customizada" : "padrão (dev)"}`);
 });

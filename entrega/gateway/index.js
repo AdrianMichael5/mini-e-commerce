@@ -1,18 +1,16 @@
 const express = require("express");
-const { createProxyMiddleware, fixRequestBody } = require("http-proxy-middleware");
+const { createProxyMiddleware } = require("http-proxy-middleware");
 const fetch = require("node-fetch");
 
 const app = express();
 
-// IMPORTANTE: express.json() SOMENTE para a rota local do gateway.
-// Nas rotas de proxy o body NÃO deve ser pré-parseado, pois isso consome
-// o stream e o proxy não consegue repassá-lo aos serviços downstream.
-// O fixRequestBody (fornecido pelo http-proxy-middleware) reconstrói o
-// stream após o bodyParser, mas só é ativado nas rotas que precisam.
+// IMPORTANTE: express.json() NÃO é usado globalmente.
+// O body parser consome o readable stream; se ativado antes do proxy,
+// o payload nunca chega ao serviço downstream. O body é repassado raw.
 
 const PORT = process.env.PORT || 3000;
 
-// ── Registry ────────────────────────────────────────────────────────────────
+// ── Registry ─────────────────────────────────────────────────────────────────
 
 const serviceRegistry = {
   users: {
@@ -41,9 +39,11 @@ const serviceRegistry = {
   },
 };
 
+// Contador global para round-robin de leituras de produtos
 let productReadCounter = 0;
+let heartbeatCycle = 0;
 
-// ── Heartbeat ────────────────────────────────────────────────────────────────
+// ── Heartbeat ─────────────────────────────────────────────────────────────────
 
 async function checkService(name) {
   const svc = serviceRegistry[name];
@@ -61,24 +61,32 @@ async function checkService(name) {
       svc.status = "up";
       svc.lastCheck = timestamp;
       if (previousStatus === "down") {
-        console.log(`[RECOVERY] ${name} voltou em ${timestamp}`);
+        console.log(`[RECOVERY] ${name} voltou ao ar em ${timestamp}`);
       }
     } else {
       throw new Error(`HTTP ${res.status}`);
     }
-  } catch {
+  } catch (err) {
     svc.failCount++;
     svc.lastCheck = timestamp;
     if (svc.failCount >= 2 && svc.status !== "down") {
       svc.status = "down";
-      console.log(`[FAILURE] ${name} caiu em ${timestamp}`);
+      console.error(`[FAILURE] ${name} marcado como DOWN em ${timestamp} (erro: ${err.message})`);
+    } else if (svc.failCount === 1) {
+      console.warn(`[heartbeat] ${name} falhou (tentativa 1/2): ${err.message}`);
     }
   }
 }
 
 function startHeartbeat() {
-  Object.keys(serviceRegistry).forEach(checkService);
-  setInterval(() => Object.keys(serviceRegistry).forEach(checkService), 5000);
+  // Checagem imediata no boot
+  const runCycle = () => {
+    heartbeatCycle++;
+    console.log(`[heartbeat] Ciclo #${heartbeatCycle} — verificando ${Object.keys(serviceRegistry).length} serviços`);
+    Object.keys(serviceRegistry).forEach(checkService);
+  };
+  runCycle();
+  setInterval(runCycle, 5000);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -87,6 +95,7 @@ function guardService(name) {
   return (req, res, next) => {
     const svc = serviceRegistry[name];
     if (svc.status === "down") {
+      console.warn(`[guard] Requisição bloqueada — serviço ${name} está DOWN`);
       return res.status(503).json({
         error: "Service unavailable",
         service: name,
@@ -97,9 +106,7 @@ function guardService(name) {
   };
 }
 
-// Fabrica um proxy para um target fixo.
-// fixRequestBody reconstrói o stream depois do bodyParser — aqui não usamos
-// bodyParser global, então não é necessário, mas é mantido por segurança.
+// Cria proxy com repasse de Authorization e marcação de X-Gateway-Request
 function makeProxy(getTarget, pathRewrite) {
   return createProxyMiddleware({
     router: getTarget,
@@ -107,13 +114,15 @@ function makeProxy(getTarget, pathRewrite) {
     pathRewrite,
     on: {
       proxyReq: (proxyReq, req) => {
+        // Repassa Authorization intacto — essencial para autenticação downstream
         if (req.headers["authorization"]) {
           proxyReq.setHeader("Authorization", req.headers["authorization"]);
         }
+        // Marca todas as requisições internas vindas do gateway
         proxyReq.setHeader("X-Gateway-Request", "true");
       },
       error: (err, req, res) => {
-        console.error("[gateway-proxy] Erro:", err.message);
+        console.error(`[gateway-proxy] Erro ao fazer proxy de ${req.method} ${req.url}:`, err.message);
         if (!res.headersSent) {
           res.status(502).json({ error: "Bad gateway", detail: err.message });
         }
@@ -122,7 +131,7 @@ function makeProxy(getTarget, pathRewrite) {
   });
 }
 
-// ── Rota local (única que precisa de body parser) ─────────────────────────────
+// ── Rota local ────────────────────────────────────────────────────────────────
 
 app.get("/gateway/health", (req, res) => {
   const services = {};
@@ -134,48 +143,55 @@ app.get("/gateway/health", (req, res) => {
 
 // ── Proxy routes ──────────────────────────────────────────────────────────────
 
-// Users — repassa tudo para :5001
+// Users — todas as rotas repassadas para :5001
 app.use(
   "/users",
   guardService("users"),
   makeProxy(() => serviceRegistry.users.url, { "^/users": "/users" })
 );
 
-// Products — GET → round-robin; escrita → primária
+// Products — GET: round-robin entre instâncias UP; escrita: sempre primária
 app.use("/products", (req, res, next) => {
   if (req.method === "GET") {
     const candidates = ["products-primary", "products-replica"].filter(
       (n) => serviceRegistry[n].status === "up"
     );
+
     if (candidates.length === 0) {
+      console.warn("[round-robin] Nenhuma instância de products disponível");
       return res.status(503).json({
         error: "Service unavailable",
         service: "products",
         lastCheck: serviceRegistry["products-primary"].lastCheck,
       });
     }
+
     const chosen = candidates[productReadCounter % candidates.length];
     productReadCounter++;
-    console.log(`[round-robin] GET /products → ${chosen}`);
+    console.log(`[round-robin] GET ${req.url} → ${chosen} (req #${productReadCounter}, candidatos: ${candidates.join(", ")})`);
+
     return makeProxy(() => serviceRegistry[chosen].url, { "^/products": "/products" })(
       req, res, next
     );
   }
 
-  // Escritas → primária
+  // POST/PUT/PATCH/DELETE → sempre primária
   if (serviceRegistry["products-primary"].status === "down") {
+    console.warn("[gateway] Escrita em products bloqueada — primária está DOWN");
     return res.status(503).json({
       error: "Service unavailable",
       service: "products-primary",
       lastCheck: serviceRegistry["products-primary"].lastCheck,
     });
   }
+
+  console.log(`[gateway] ${req.method} ${req.url} → products-primary`);
   return makeProxy(() => serviceRegistry["products-primary"].url, {
     "^/products": "/products",
   })(req, res, next);
 });
 
-// Orders
+// Orders — todas as rotas repassadas para :5003
 app.use(
   "/orders",
   guardService("orders"),
@@ -185,6 +201,10 @@ app.use(
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`API Gateway running on port ${PORT}`);
+  console.log(`[boot] API Gateway iniciado na porta ${PORT}`);
+  console.log(`[boot] Serviços configurados:`);
+  for (const [name, svc] of Object.entries(serviceRegistry)) {
+    console.log(`[boot]   ${name} → ${svc.url}`);
+  }
   startHeartbeat();
 });

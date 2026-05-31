@@ -15,15 +15,40 @@ const PORT = process.env.PORT || 5003;
 const PRODUCTS_URL = process.env.PRODUCTS_URL || "http://localhost:5002";
 const ORDERS_FILE = path.join(__dirname, "data", "orders.json");
 
+// ── Persistência ─────────────────────────────────────────────────────────────
+
+function ensureDataFile() {
+  const dir = path.dirname(ORDERS_FILE);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`[init] Diretório criado: ${dir}`);
+  }
+  if (!fs.existsSync(ORDERS_FILE)) {
+    fs.writeFileSync(ORDERS_FILE, "[]");
+    console.log(`[init] Arquivo criado: ${ORDERS_FILE}`);
+  }
+}
+
 function readOrders() {
-  return JSON.parse(fs.readFileSync(ORDERS_FILE, "utf-8"));
+  try {
+    return JSON.parse(fs.readFileSync(ORDERS_FILE, "utf-8"));
+  } catch (err) {
+    console.error("[storage] Erro ao ler orders.json:", err.message);
+    return [];
+  }
 }
 
 function writeOrders(orders) {
-  fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
+  try {
+    fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
+  } catch (err) {
+    console.error("[storage] Erro ao gravar orders.json:", err.message);
+    throw err;
+  }
 }
 
-// GET síncrono via http nativo — sem dependências externas
+// ── Comunicação com Products ───────────────────────────────────────────────────
+
 function fetchProduct(productId) {
   return new Promise((resolve, reject) => {
     const url = new URL(`${PRODUCTS_URL}/products/${productId}`);
@@ -51,7 +76,7 @@ function fetchProduct(productId) {
   });
 }
 
-// ── Endpoints ──────────────────────────────────────────────────────────────
+// ── Endpoints ────────────────────────────────────────────────────────────────
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "orders" });
@@ -64,7 +89,6 @@ app.post("/orders", verifyToken, async (req, res) => {
     return res.status(400).json({ error: "productId e quantity (>= 1) são obrigatórios" });
   }
 
-  // Valida existência do produto
   let product;
   try {
     const result = await fetchProduct(productId);
@@ -76,7 +100,7 @@ app.post("/orders", verifyToken, async (req, res) => {
     }
     product = JSON.parse(result.body);
   } catch (err) {
-    console.error("[products-fetch] Erro:", err.message);
+    console.error("[products-fetch] Erro ao consultar produtos:", err.message);
     return res.status(502).json({ error: "Serviço de produtos indisponível" });
   }
 
@@ -93,6 +117,7 @@ app.post("/orders", verifyToken, async (req, res) => {
   orders.push(order);
   writeOrders(orders);
 
+  console.log(`[order] Pedido criado: id=${order.id} userId=${order.userId} productId=${order.productId} qty=${quantity}`);
   return res.status(201).json(order);
 });
 
@@ -108,7 +133,10 @@ app.get("/orders/:userId", verifyToken, (req, res) => {
   res.json(orders);
 });
 
+// ── Boot ──────────────────────────────────────────────────────────────────────
+
+ensureDataFile();
 app.listen(PORT, () => {
-  console.log(`Orders service running on port ${PORT}`);
-  console.log(`Products URL: ${PRODUCTS_URL}`);
+  console.log(`[boot] Orders service iniciado na porta ${PORT}`);
+  console.log(`[boot] Products URL configurada: ${PRODUCTS_URL}`);
 });

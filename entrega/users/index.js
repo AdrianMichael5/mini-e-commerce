@@ -16,13 +16,39 @@ const PORT = process.env.PORT || 5001;
 const JWT_SECRET = process.env.JWT_SECRET || "supersecret";
 const USERS_FILE = path.join(__dirname, "data", "users.json");
 
+// ── Persistência ─────────────────────────────────────────────────────────────
+
+function ensureDataFile() {
+  const dir = path.dirname(USERS_FILE);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`[init] Diretório criado: ${dir}`);
+  }
+  if (!fs.existsSync(USERS_FILE)) {
+    fs.writeFileSync(USERS_FILE, "[]");
+    console.log(`[init] Arquivo criado: ${USERS_FILE}`);
+  }
+}
+
 function readUsers() {
-  return JSON.parse(fs.readFileSync(USERS_FILE, "utf-8"));
+  try {
+    return JSON.parse(fs.readFileSync(USERS_FILE, "utf-8"));
+  } catch (err) {
+    console.error("[storage] Erro ao ler users.json:", err.message);
+    return [];
+  }
 }
 
 function writeUsers(users) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+  try {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+  } catch (err) {
+    console.error("[storage] Erro ao gravar users.json:", err.message);
+    throw err;
+  }
 }
+
+// ── Endpoints ────────────────────────────────────────────────────────────────
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "users" });
@@ -46,6 +72,7 @@ app.post("/users/register", async (req, res) => {
   users.push(newUser);
   writeUsers(users);
 
+  console.log(`[register] Novo usuário: ${email} (id=${newUser.id})`);
   return res.status(201).json({ id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role });
 });
 
@@ -60,6 +87,7 @@ app.post("/users/login", async (req, res) => {
   const user = users.find((u) => u.email === email);
 
   if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+    console.warn(`[login] Tentativa inválida para: ${email}`);
     return res.status(401).json({ error: "Credenciais inválidas" });
   }
 
@@ -69,6 +97,7 @@ app.post("/users/login", async (req, res) => {
     { expiresIn: "2h" }
   );
 
+  console.log(`[login] Login bem-sucedido: ${email} (role=${user.role})`);
   return res.json({ token });
 });
 
@@ -99,10 +128,15 @@ app.post("/users/make-admin/:id", (req, res) => {
   if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
   user.role = "admin";
   writeUsers(users);
+  console.log(`[make-admin] Usuário promovido: ${user.email} (id=${user.id})`);
   const { passwordHash, ...safeUser } = user;
   return res.json({ message: "Papel atualizado para admin", user: safeUser });
 });
 
+// ── Boot ──────────────────────────────────────────────────────────────────────
+
+ensureDataFile();
 app.listen(PORT, () => {
-  console.log(`Users service running on port ${PORT}`);
+  console.log(`[boot] Users service iniciado na porta ${PORT}`);
+  console.log(`[boot] JWT_SECRET configurado: ${JWT_SECRET !== "supersecret" ? "customizado" : "padrão (dev)"}`);
 });

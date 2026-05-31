@@ -16,15 +16,40 @@ const REPLICA_URL = process.env.REPLICA_URL || "http://localhost:5012";
 const INTERNAL_KEY = process.env.INTERNAL_KEY || "internalkey123";
 const PRODUCTS_FILE = path.join(__dirname, "data", "products.json");
 
+// ── Persistência ─────────────────────────────────────────────────────────────
+
+function ensureDataFile() {
+  const dir = path.dirname(PRODUCTS_FILE);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`[init] Diretório criado: ${dir}`);
+  }
+  if (!fs.existsSync(PRODUCTS_FILE)) {
+    fs.writeFileSync(PRODUCTS_FILE, "[]");
+    console.log(`[init] Arquivo criado: ${PRODUCTS_FILE}`);
+  }
+}
+
 function readProducts() {
-  return JSON.parse(fs.readFileSync(PRODUCTS_FILE, "utf-8"));
+  try {
+    return JSON.parse(fs.readFileSync(PRODUCTS_FILE, "utf-8"));
+  } catch (err) {
+    console.error("[storage] Erro ao ler products.json:", err.message);
+    return [];
+  }
 }
 
 function writeProducts(products) {
-  fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(products, null, 2));
+  try {
+    fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(products, null, 2));
+  } catch (err) {
+    console.error("[storage] Erro ao gravar products.json:", err.message);
+    throw err;
+  }
 }
 
-// Faz POST síncrono para a réplica sem dependências externas (http nativo)
+// ── Replicação síncrona ───────────────────────────────────────────────────────
+
 function syncToReplica(product) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(product);
@@ -65,14 +90,15 @@ function syncToReplica(product) {
   });
 }
 
-// ── Endpoints ──────────────────────────────────────────────────────────────
+// ── Endpoints ────────────────────────────────────────────────────────────────
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "products-primary" });
 });
 
 app.get("/products", (req, res) => {
-  res.json(readProducts());
+  const products = readProducts();
+  res.json(products);
 });
 
 app.get("/products/:id", (req, res) => {
@@ -93,22 +119,25 @@ app.post("/products", verifyToken, requireAdmin, async (req, res) => {
   const products = readProducts();
   products.push(product);
   writeProducts(products);
+  console.log(`[product] Criado: "${name}" (id=${product.id})`);
 
   // Sincronização síncrona com a réplica
   try {
     await syncToReplica(product);
+    console.log(`[replica-sync] Produto ${product.id} sincronizado com sucesso`);
   } catch (err) {
-    console.error("[replica-sync] Falha ao sincronizar:", err.message);
+    console.error(`[replica-sync] Falha ao sincronizar produto ${product.id}:`, err.message);
     return res.status(201).set("X-Replica-Warning", "replica sync failed").json(product);
   }
 
   return res.status(201).json(product);
 });
 
-// Endpoint interno — aceita dados da primária (réplica usa este mesmo handler)
+// Endpoint interno — valida INTERNAL_KEY e persiste produto sincronizado
 app.post("/internal/sync", (req, res) => {
   const key = req.headers["x-internal-key"];
   if (key !== INTERNAL_KEY) {
+    console.warn("[internal-sync] Chave interna inválida recebida");
     return res.status(403).json({ error: "Chave interna inválida" });
   }
 
@@ -118,16 +147,22 @@ app.post("/internal/sync", (req, res) => {
   }
 
   const products = readProducts();
-  // Idempotente: ignora se já existe
   if (!products.find((p) => p.id === product.id)) {
     products.push(product);
     writeProducts(products);
+    console.log(`[internal-sync] Produto ${product.id} recebido e salvo (primária)`);
+  } else {
+    console.log(`[internal-sync] Produto ${product.id} já existe — ignorado (idempotente)`);
   }
 
   res.json({ synced: true });
 });
 
+// ── Boot ──────────────────────────────────────────────────────────────────────
+
+ensureDataFile();
 app.listen(PORT, () => {
-  console.log(`Products PRIMARY service running on port ${PORT}`);
-  console.log(`Replica URL: ${REPLICA_URL}`);
+  console.log(`[boot] Products PRIMARY service iniciado na porta ${PORT}`);
+  console.log(`[boot] Réplica configurada em: ${REPLICA_URL}`);
+  console.log(`[boot] INTERNAL_KEY configurada: ${INTERNAL_KEY !== "internalkey123" ? "customizada" : "padrão (dev)"}`);
 });
