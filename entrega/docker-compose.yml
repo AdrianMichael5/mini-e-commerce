@@ -1,55 +1,97 @@
-version: "3.8"
+version: "3.9"
+
+networks:
+  ecommerce-net:
+    driver: bridge
+
+volumes:
+  users-data:
+  products-data:
+  products-replica-data:
+  orders-data:
 
 services:
+  # ── Users ────────────────────────────────────────────────────────────────
   users:
-    build: ./users
+    image: node:18-alpine
+    working_dir: /app
+    command: sh -c "npm install --omit=dev && node index.js"
+    volumes:
+      - ./users:/app
+      - users-data:/app/data
     ports:
-      - "${USERS_PORT:-5001}:5001"
+      - "5001:5001"
     environment:
       PORT: 5001
       JWT_SECRET: ${JWT_SECRET:-supersecret}
-    volumes:
-      - ./users/data:/app/data
+      INTERNAL_KEY: ${INTERNAL_KEY:-internalkey123}
+    networks:
+      - ecommerce-net
+    restart: unless-stopped
 
+  # ── Products (primária) ───────────────────────────────────────────────────
   products:
-    build: ./products
+    image: node:18-alpine
+    working_dir: /app
+    command: sh -c "npm install --omit=dev && node index.js"
+    volumes:
+      - ./products:/app
+      - products-data:/app/data
     ports:
-      - "${PRODUCTS_PORT:-5002}:5002"
+      - "5002:5002"
     environment:
       PORT: 5002
       JWT_SECRET: ${JWT_SECRET:-supersecret}
-    volumes:
-      - ./products/data:/app/data
+      INTERNAL_KEY: ${INTERNAL_KEY:-internalkey123}
+      REPLICA_URL: http://products-replica:5012
+    networks:
+      - ecommerce-net
+    restart: unless-stopped
 
+  # ── Products-replica ──────────────────────────────────────────────────────
   products-replica:
-    build: ./products-replica
+    image: node:18-alpine
+    working_dir: /app
+    command: sh -c "npm install --omit=dev && node index.js"
+    volumes:
+      - ./products-replica:/app
+      - products-replica-data:/app/data
     ports:
-      - "${PRODUCTS_REPLICA_PORT:-5012}:5012"
+      - "5012:5012"
     environment:
       PORT: 5012
-      JWT_SECRET: ${JWT_SECRET:-supersecret}
-    volumes:
-      - ./products/data:/app/data
+      INTERNAL_KEY: ${INTERNAL_KEY:-internalkey123}
+    networks:
+      - ecommerce-net
+    restart: unless-stopped
 
+  # ── Orders ───────────────────────────────────────────────────────────────
   orders:
-    build: ./orders
+    image: node:18-alpine
+    working_dir: /app
+    command: sh -c "npm install --omit=dev && node index.js"
+    volumes:
+      - ./orders:/app
+      - orders-data:/app/data
     ports:
-      - "${ORDERS_PORT:-5003}:5003"
+      - "5003:5003"
     environment:
       PORT: 5003
       JWT_SECRET: ${JWT_SECRET:-supersecret}
-      USERS_URL: http://users:5001
       PRODUCTS_URL: http://products:5002
-    volumes:
-      - ./orders/data:/app/data
-    depends_on:
-      - users
-      - products
+    networks:
+      - ecommerce-net
+    restart: unless-stopped
 
+  # ── Gateway ───────────────────────────────────────────────────────────────
   gateway:
-    build: ./gateway
+    image: node:18-alpine
+    working_dir: /app
+    command: sh -c "npm install --omit=dev && node index.js"
+    volumes:
+      - ./gateway:/app
     ports:
-      - "${GATEWAY_PORT:-3000}:3000"
+      - "3000:3000"
     environment:
       PORT: 3000
       JWT_SECRET: ${JWT_SECRET:-supersecret}
@@ -62,3 +104,6 @@ services:
       - products
       - products-replica
       - orders
+    networks:
+      - ecommerce-net
+    restart: unless-stopped

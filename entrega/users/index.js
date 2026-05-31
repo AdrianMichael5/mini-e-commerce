@@ -91,6 +91,18 @@ app.get("/users/:id", verifyToken, (req, res) => {
   return res.json(safeUser);
 });
 
+// Endpoint de desenvolvimento — promove usuário a admin sem autenticação.
+// NÃO usar em produção.
+app.post("/users/make-admin/:id", (req, res) => {
+  const users = readUsers();
+  const user = users.find((u) => u.id === req.params.id);
+  if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
+  user.role = "admin";
+  writeUsers(users);
+  const { passwordHash, ...safeUser } = user;
+  return res.json({ message: "Papel atualizado para admin", user: safeUser });
+});
+
 app.listen(PORT, () => {
   console.log(`Users service running on port ${PORT}`);
 });
