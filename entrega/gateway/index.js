@@ -1,6 +1,19 @@
 const express = require("express");
 const { createProxyMiddleware } = require("http-proxy-middleware");
 const fetch = require("node-fetch");
+const https = require("https");
+const fs = require("fs");
+const path = require("path");
+
+// ── TLS interno ───────────────────────────────────────────────────────────────
+const CA_PATH   = "/app/certs/ca.crt";
+const TLS_KEY   = "/app/certs/service.key";
+const TLS_CERT  = "/app/certs/service.crt";
+const hasTLS    = fs.existsSync(CA_PATH) && fs.existsSync(TLS_KEY) && fs.existsSync(TLS_CERT);
+
+const internalAgent = hasTLS
+  ? new https.Agent({ ca: fs.readFileSync(CA_PATH) })
+  : undefined;
 
 const app = express();
 
@@ -53,7 +66,7 @@ async function checkService(name) {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 2000);
-    const res = await fetch(`${svc.url}/health`, { signal: controller.signal });
+    const res = await fetch(`${svc.url}/health`, { signal: controller.signal, agent: internalAgent });
     clearTimeout(timeoutId);
 
     if (res.ok) {
@@ -112,6 +125,7 @@ function makeProxy(getTarget, pathRewrite) {
     router: getTarget,
     changeOrigin: true,
     pathRewrite,
+    ...(internalAgent && { agent: internalAgent }),
     on: {
       proxyReq: (proxyReq, req) => {
         // Repassa Authorization intacto — essencial para autenticação downstream
@@ -130,6 +144,12 @@ function makeProxy(getTarget, pathRewrite) {
     },
   });
 }
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+
+app.get("/dashboard", (req, res) => {
+  res.sendFile(path.join(__dirname, "dashboard.html"));
+});
 
 // ── Rota local ────────────────────────────────────────────────────────────────
 
@@ -200,11 +220,19 @@ app.use(
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
-  console.log(`[boot] API Gateway iniciado na porta ${PORT}`);
+const boot = () => {
+  console.log(`[boot] API Gateway iniciado na porta ${PORT}${hasTLS ? " (HTTPS)" : ""}`);
+  console.log(`[boot] Dashboard disponível em: ${hasTLS ? "https" : "http"}://localhost:${PORT}/dashboard`);
   console.log(`[boot] Serviços configurados:`);
   for (const [name, svc] of Object.entries(serviceRegistry)) {
     console.log(`[boot]   ${name} → ${svc.url}`);
   }
   startHeartbeat();
-});
+};
+
+if (hasTLS) {
+  https.createServer({ key: fs.readFileSync(TLS_KEY), cert: fs.readFileSync(TLS_CERT) }, app)
+    .listen(PORT, () => { console.log("[boot] TLS ativo"); boot(); });
+} else {
+  app.listen(PORT, boot);
+}

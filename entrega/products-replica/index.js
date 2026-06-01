@@ -1,4 +1,5 @@
 const express = require("express");
+const https = require("https");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
@@ -87,7 +88,17 @@ app.post("/internal/sync", (req, res) => {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 ensureDataFile();
-app.listen(PORT, () => {
+
+const TLS_KEY = "/app/certs/service.key";
+const TLS_CERT = "/app/certs/service.crt";
+const boot = () => {
   console.log(`[boot] Products REPLICA service iniciado na porta ${PORT}`);
   console.log(`[boot] INTERNAL_KEY configurada: ${INTERNAL_KEY !== "internalkey123" ? "customizada" : "padrão (dev)"}`);
-});
+};
+
+if (fs.existsSync(TLS_KEY) && fs.existsSync(TLS_CERT)) {
+  https.createServer({ key: fs.readFileSync(TLS_KEY), cert: fs.readFileSync(TLS_CERT) }, app)
+    .listen(PORT, () => { console.log("[boot] TLS ativo"); boot(); });
+} else {
+  app.listen(PORT, boot);
+}

@@ -6,9 +6,9 @@
 
 ### Estratégia Implementada
 
-Todos os serviços se comunicam exclusivamente via **HTTP/REST síncrono**. O API Gateway atua como proxy reverso, interceptando cada requisição do cliente, verificando a disponibilidade do serviço-alvo no registry interno e repassando a chamada com os headers originais preservados (`Authorization`, `Content-Type`) mais o marcador interno `X-Gateway-Request: true`.
+Todos os serviços se comunicam exclusivamente via **HTTPS/REST síncrono**. Toda a comunicação interna é cifrada com TLS usando certificados auto-assinados emitidos por uma CA interna dedicada (`ecommerce-ca`), montada em cada container via volume Docker. O API Gateway atua como proxy reverso, interceptando cada requisição do cliente, verificando a disponibilidade do serviço-alvo no registry interno e repassando a chamada com os headers originais preservados (`Authorization`, `Content-Type`) mais o marcador interno `X-Gateway-Request: true`.
 
-A única comunicação serviço-a-serviço fora do gateway ocorre no fluxo de criação de pedidos: o serviço Orders consulta diretamente o serviço Products via `GET /products/:id` antes de persistir o pedido, validando a existência do produto sem passar pelo gateway. Adicionalmente, a primária de Products envia `POST /internal/sync` à réplica no mesmo fluxo de escrita, protegido por `X-Internal-Key`.
+A única comunicação serviço-a-serviço fora do gateway ocorre no fluxo de criação de pedidos: o serviço Orders consulta diretamente o serviço Products via `GET /products/:id` antes de persistir o pedido, validando a existência do produto sem passar pelo gateway. Adicionalmente, a primária de Products envia `POST /internal/sync` à réplica no mesmo fluxo de escrita, protegido por TLS e pela chave interna `X-Internal-Key`.
 
 ### Trade-offs: REST vs Filas de Mensagem
 
@@ -54,7 +54,7 @@ O heartbeat do gateway verifica `/health` de cada serviço a cada 5 segundos com
 
 - Requisições para `/orders/*` retornam imediatamente `503 Service Unavailable` sem tentativa de conexão.
 - Os serviços Users e Products continuam **100% operacionais** — não há dependência entre eles e o serviço de pedidos em tempo de leitura ou escrita.
-- O log do gateway registra `[FAILURE] orders caiu em <timestamp>`, permitindo alertas baseados em stdout.
+- O log do gateway registra `[FAILURE] orders marcado como DOWN em <timestamp>`, permitindo alertas baseados em stdout.
 
 ### Risco de Perda de Dados em Trânsito
 
@@ -103,7 +103,7 @@ O segredo nunca trafega entre serviços — cada serviço valida independentemen
 | **Sem retry automático** | Falha transiente = erro permanente para o cliente | Retry exponencial com jitter no gateway |
 | **Sem rate limiting** | API exposta a abuso e DDoS | `express-rate-limit` ou API Gateway gerenciado |
 | **Segredos em variáveis de ambiente** | Risco de exposição em logs, `ps aux`, dumps de container | AWS Secrets Manager, HashiCorp Vault, Kubernetes Secrets |
-| **Sem TLS interno** | Tráfego entre serviços em plaintext | mTLS com cert-manager, service mesh (Istio/Linkerd) |
+| **TLS com cert auto-assinado** | CA interna não confiada por padrão; exige `-k` no curl ou importar `ca.crt` | PKI gerenciada (Let's Encrypt, AWS ACM) com renovação automática e mTLS via service mesh (Istio/Linkerd) |
 | **Persistência em arquivo JSON** | Sem transações, sem concorrência segura, sem backup | PostgreSQL/MongoDB com replicação nativa |
 | **Sem health checks de startup** | Gateway pode rotear antes do serviço estar pronto | `healthcheck` no Docker Compose com `condition: service_healthy` |
 

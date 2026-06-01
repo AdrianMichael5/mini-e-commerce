@@ -4,6 +4,7 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
+const https = require("https");
 
 const { verifyToken } = require("./middleware/auth");
 
@@ -52,15 +53,17 @@ function writeOrders(orders) {
 function fetchProduct(productId) {
   return new Promise((resolve, reject) => {
     const url = new URL(`${PRODUCTS_URL}/products/${productId}`);
+    const isHttps = url.protocol === "https:";
+    const transport = isHttps ? https : http;
 
     const options = {
       hostname: url.hostname,
-      port: url.port || 80,
+      port: url.port || (isHttps ? 443 : 80),
       path: url.pathname,
       method: "GET",
     };
 
-    const req = http.request(options, (res) => {
+    const req = transport.request(options, (res) => {
       let data = "";
       res.on("data", (chunk) => (data += chunk));
       res.on("end", () => resolve({ status: res.statusCode, body: data }));
@@ -136,7 +139,17 @@ app.get("/orders/:userId", verifyToken, (req, res) => {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 ensureDataFile();
-app.listen(PORT, () => {
+
+const TLS_KEY = "/app/certs/service.key";
+const TLS_CERT = "/app/certs/service.crt";
+const boot = () => {
   console.log(`[boot] Orders service iniciado na porta ${PORT}`);
   console.log(`[boot] Products URL configurada: ${PRODUCTS_URL}`);
-});
+};
+
+if (fs.existsSync(TLS_KEY) && fs.existsSync(TLS_CERT)) {
+  https.createServer({ key: fs.readFileSync(TLS_KEY), cert: fs.readFileSync(TLS_CERT) }, app)
+    .listen(PORT, () => { console.log("[boot] TLS ativo"); boot(); });
+} else {
+  app.listen(PORT, boot);
+}

@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard — Mini E-commerce</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+      padding-bottom: 1.25rem;
+      border-bottom: 1px solid #1e293b;
+    }
+
+    h1 { font-size: 1.4rem; color: #f8fafc; font-weight: 600; }
+    h1 span { color: #3b82f6; }
+
+    .badge {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 9999px;
+      padding: 0.3rem 0.9rem;
+      font-size: 0.75rem;
+      color: #64748b;
+    }
+    .badge b { color: #94a3b8; }
+
+    .gateway-banner {
+      background: linear-gradient(135deg, #172554, #1e293b);
+      border: 1px solid #1d4ed8;
+      border-radius: 0.75rem;
+      padding: 1.1rem 1.5rem;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .gateway-banner .indicator {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #3b82f6;
+      box-shadow: 0 0 10px #3b82f688;
+      flex-shrink: 0;
+    }
+    .gateway-banner .label { color: #93c5fd; font-weight: 600; }
+    .gateway-banner .meta { color: #475569; font-size: 0.8rem; margin-left: auto; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 0.75rem;
+      padding: 1.25rem;
+      transition: border-color 0.4s, box-shadow 0.4s;
+    }
+    .card.up   { border-color: #14532d; box-shadow: 0 0 16px #16a34a11; }
+    .card.down { border-color: #7f1d1d; box-shadow: 0 0 16px #ef444411; }
+
+    .card-label {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #64748b;
+      margin-bottom: 0.8rem;
+    }
+
+    .card-status {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      font-size: 1.25rem;
+      font-weight: 700;
+    }
+    .card.up   .card-status { color: #4ade80; }
+    .card.down .card-status { color: #f87171; }
+
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+    }
+    .card.up   .dot { background: #22c55e; box-shadow: 0 0 7px #22c55e99; }
+    .card.down .dot { background: #ef4444; box-shadow: 0 0 7px #ef444499; }
+
+    .card-meta { font-size: 0.72rem; color: #475569; margin-top: 0.55rem; }
+
+    .log-section h2 {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #475569;
+      margin-bottom: 0.75rem;
+    }
+
+    .log-box {
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 0.5rem;
+      padding: 1rem;
+      font-family: "Courier New", monospace;
+      font-size: 0.78rem;
+      color: #64748b;
+      max-height: 160px;
+      overflow-y: auto;
+    }
+
+    .log-entry { margin-bottom: 0.25rem; }
+    .log-entry.up   { color: #4ade80; }
+    .log-entry.down { color: #f87171; }
+    .log-entry.info { color: #94a3b8; }
+
+    .error-banner {
+      background: #450a0a;
+      border: 1px solid #991b1b;
+      border-radius: 0.75rem;
+      padding: 1.25rem;
+      color: #fca5a5;
+      font-size: 0.875rem;
+    }
+
+    footer {
+      margin-top: 2rem;
+      text-align: right;
+      font-size: 0.72rem;
+      color: #1e293b;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Mini <span>E-commerce</span> — Dashboard</h1>
+    <span class="badge">Próxima atualização em <b id="countdown">5</b>s</span>
+  </header>
+
+  <div id="root">
+    <div class="gateway-banner">
+      <span class="indicator"></span>
+      <span class="label">Conectando ao gateway...</span>
+    </div>
+  </div>
+
+  <div class="log-section" style="margin-top:1.5rem">
+    <h2>Histórico de eventos</h2>
+    <div class="log-box" id="log"></div>
+  </div>
+
+  <footer>Mini E-commerce Distribuído · Sistemas Distribuídos</footer>
+
+  <script>
+    const SERVICE_NAMES = {
+      users:              "Users Service",
+      "products-primary": "Products (Primária)",
+      "products-replica": "Products (Réplica)",
+      orders:             "Orders Service",
+    };
+
+    let prevStatus = {};
+    const logEntries = [];
+
+    function addLog(msg, type = "info") {
+      const time = new Date().toLocaleTimeString("pt-BR");
+      logEntries.unshift({ time, msg, type });
+      if (logEntries.length > 30) logEntries.pop();
+      renderLog();
+    }
+
+    function renderLog() {
+      const box = document.getElementById("log");
+      box.innerHTML = logEntries.map(e =>
+        `<div class="log-entry ${e.type}">[${e.time}] ${e.msg}</div>`
+      ).join("") || '<div class="log-entry info">Nenhum evento ainda.</div>';
+    }
+
+    function fmt(iso) {
+      if (!iso) return "—";
+      return new Date(iso).toLocaleTimeString("pt-BR");
+    }
+
+    async function fetchHealth() {
+      try {
+        const res = await fetch("/gateway/health");
+        const data = await res.json();
+        render(data);
+      } catch {
+        document.getElementById("root").innerHTML =
+          '<div class="error-banner">Não foi possível conectar ao gateway. Verifique se o servidor está rodando.</div>';
+        addLog("Falha ao conectar ao gateway.", "down");
+      }
+    }
+
+    function render(data) {
+      const services = data.services || {};
+      const entries = Object.entries(services);
+
+      // Detectar mudanças de status
+      for (const [key, svc] of entries) {
+        const prev = prevStatus[key];
+        if (prev !== undefined && prev !== svc.status) {
+          const name = SERVICE_NAMES[key] || key;
+          if (svc.status === "up") {
+            addLog(`${name} voltou ao ar (RECOVERY).`, "up");
+          } else {
+            addLog(`${name} está FORA do ar (FAILURE).`, "down");
+          }
+        }
+        prevStatus[key] = svc.status;
+      }
+
+      const upCount = entries.filter(([, s]) => s.status === "up").length;
+
+      const banner = `
+        <div class="gateway-banner">
+          <span class="indicator"></span>
+          <span class="label">API Gateway — ONLINE</span>
+          <span class="meta">${upCount}/${entries.length} serviços ativos · porta 3000</span>
+        </div>`;
+
+      const cards = entries.map(([key, svc]) => {
+        const cls = svc.status === "up" ? "up" : "down";
+        const label = svc.status === "up" ? "UP" : "DOWN";
+        const name = SERVICE_NAMES[key] || key;
+        return `
+          <div class="card ${cls}">
+            <div class="card-label">${name}</div>
+            <div class="card-status"><span class="dot"></span>${label}</div>
+            <div class="card-meta">Última verificação: ${fmt(svc.lastCheck)}</div>
+          </div>`;
+      }).join("");
+
+      document.getElementById("root").innerHTML =
+        banner + '<div class="grid">' + cards + "</div>";
+    }
+
+    // Countdown e polling
+    let tick = 5;
+    setInterval(() => {
+      tick = tick <= 1 ? 5 : tick - 1;
+      const el = document.getElementById("countdown");
+      if (el) el.textContent = tick;
+      if (tick === 5) fetchHealth();
+    }, 1000);
+
+    addLog("Dashboard iniciado.", "info");
+    fetchHealth();
+  </script>
+</body>
+</html>

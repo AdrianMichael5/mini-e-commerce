@@ -6,6 +6,7 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 
+const https = require("https");
 const { verifyToken } = require("./middleware/auth");
 
 const app = express();
@@ -136,7 +137,17 @@ app.post("/users/make-admin/:id", (req, res) => {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 ensureDataFile();
-app.listen(PORT, () => {
+
+const TLS_KEY = "/app/certs/service.key";
+const TLS_CERT = "/app/certs/service.crt";
+const boot = () => {
   console.log(`[boot] Users service iniciado na porta ${PORT}`);
   console.log(`[boot] JWT_SECRET configurado: ${JWT_SECRET !== "supersecret" ? "customizado" : "padrão (dev)"}`);
-});
+};
+
+if (fs.existsSync(TLS_KEY) && fs.existsSync(TLS_CERT)) {
+  https.createServer({ key: fs.readFileSync(TLS_KEY), cert: fs.readFileSync(TLS_CERT) }, app)
+    .listen(PORT, () => { console.log("[boot] TLS ativo"); boot(); });
+} else {
+  app.listen(PORT, boot);
+}

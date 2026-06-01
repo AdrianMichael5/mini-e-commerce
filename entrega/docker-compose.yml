@@ -19,12 +19,15 @@ services:
     volumes:
       - ./users:/app
       - users-data:/app/data
+      - /app/node_modules
+      - ./certs:/app/certs:ro
     ports:
       - "5001:5001"
     environment:
       PORT: 5001
       JWT_SECRET: ${JWT_SECRET:-supersecret}
       INTERNAL_KEY: ${INTERNAL_KEY:-internalkey123}
+      NODE_EXTRA_CA_CERTS: /app/certs/ca.crt
     networks:
       - ecommerce-net
     restart: unless-stopped
@@ -37,13 +40,16 @@ services:
     volumes:
       - ./products:/app
       - products-data:/app/data
+      - /app/node_modules
+      - ./certs:/app/certs:ro
     ports:
       - "5002:5002"
     environment:
       PORT: 5002
       JWT_SECRET: ${JWT_SECRET:-supersecret}
       INTERNAL_KEY: ${INTERNAL_KEY:-internalkey123}
-      REPLICA_URL: http://products-replica:5012
+      REPLICA_URL: https://products-replica:5012
+      NODE_EXTRA_CA_CERTS: /app/certs/ca.crt
     networks:
       - ecommerce-net
     restart: unless-stopped
@@ -56,11 +62,14 @@ services:
     volumes:
       - ./products-replica:/app
       - products-replica-data:/app/data
+      - /app/node_modules
+      - ./certs:/app/certs:ro
     ports:
       - "5012:5012"
     environment:
       PORT: 5012
       INTERNAL_KEY: ${INTERNAL_KEY:-internalkey123}
+      NODE_EXTRA_CA_CERTS: /app/certs/ca.crt
     networks:
       - ecommerce-net
     restart: unless-stopped
@@ -73,12 +82,15 @@ services:
     volumes:
       - ./orders:/app
       - orders-data:/app/data
+      - /app/node_modules
+      - ./certs:/app/certs:ro
     ports:
       - "5003:5003"
     environment:
       PORT: 5003
       JWT_SECRET: ${JWT_SECRET:-supersecret}
-      PRODUCTS_URL: http://products:5002
+      PRODUCTS_URL: https://products:5002
+      NODE_EXTRA_CA_CERTS: /app/certs/ca.crt
     networks:
       - ecommerce-net
     restart: unless-stopped
@@ -90,15 +102,18 @@ services:
     command: sh -c "npm install --omit=dev && node index.js"
     volumes:
       - ./gateway:/app
+      - /app/node_modules
+      - ./certs:/app/certs:ro
     ports:
       - "3000:3000"
     environment:
       PORT: 3000
       JWT_SECRET: ${JWT_SECRET:-supersecret}
-      USERS_URL: http://users:5001
-      PRODUCTS_URL: http://products:5002
-      PRODUCTS_REPLICA_URL: http://products-replica:5012
-      ORDERS_URL: http://orders:5003
+      USERS_URL: https://users:5001
+      PRODUCTS_URL: https://products:5002
+      PRODUCTS_REPLICA_URL: https://products-replica:5012
+      ORDERS_URL: https://orders:5003
+      NODE_EXTRA_CA_CERTS: /app/certs/ca.crt
     depends_on:
       - users
       - products
