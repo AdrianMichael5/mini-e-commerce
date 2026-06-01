@@ -157,8 +157,8 @@ Resposta esperada:
 O produto deve aparecer igual nos dois arquivos:
 
 ```bash
-echo "=== Primária ===" && docker compose exec products cat /app/data/products.json
-echo "=== Réplica ===" && docker compose exec products-replica cat /app/data/products.json
+echo "=== Primária ===" && MSYS_NO_PATHCONV=1 docker compose exec products cat /app/data/products.json
+echo "=== Réplica ===" && MSYS_NO_PATHCONV=1 docker compose exec products-replica cat /app/data/products.json
 ```
 
 Os dois devem conter o mesmo produto com o mesmo `id`.
