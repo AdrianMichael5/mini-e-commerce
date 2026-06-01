@@ -3,414 +3,304 @@
 Arquitetura de microsserviços com API Gateway, replicação de produtos e heartbeat automático.
 
 ```
-Cliente → Gateway :3000
-              ├── Users          :5001
-              ├── Products       :5002  ←→  Products-Replica :5012
-              └── Orders         :5003
+Você (navegador/terminal)
+        │
+        ▼
+   Gateway :3000        ← único ponto de entrada
+        │
+        ├──► Users          :5001   (cadastro e login)
+        ├──► Products       :5002   (catálogo — instância primária)
+        │         └──sync──► Products-Replica :5012  (cópia do catálogo)
+        └──► Orders         :5003   (pedidos)
 ```
+
+Toda a comunicação interna usa **HTTPS** com certificados automáticos em `certs/`.
 
 ---
 
 ## Pré-requisitos
 
-| Modo | Requisito |
-|------|-----------|
-| Sem Docker | Node.js 18+ e npm |
-| Com Docker | Docker 24+ e Docker Compose v2 |
+- **Docker Desktop** instalado e aberto
+- **VS Code** com terminal integrado em **Git Bash**
+
+> Para abrir o terminal Git Bash no VS Code:
+> pressione `` Ctrl + ` ``, clique na seta `∨` ao lado do `+` e selecione **Git Bash**.
+> Os comandos abaixo **não funcionam no PowerShell** — use Git Bash.
 
 ---
 
-## Execução SEM Docker
+## 1. Subir o projeto
 
-### 1. Instalar dependências em cada serviço
-
-Abra **cinco terminais** (ou execute em sequência):
+No terminal Git Bash, dentro da pasta `entrega/`:
 
 ```bash
-cd entrega/users            && npm install
-cd entrega/products         && npm install
-cd entrega/products-replica && npm install
-cd entrega/orders           && npm install
-cd entrega/gateway          && npm install
+cd "C:/Users/ADMIN/OneDrive/Desktop/mini-e-commerce/entrega"
+docker compose up -d
 ```
 
-### 2. Configurar variáveis de ambiente (opcional)
+Aguarde aparecer `Started` para todos os 5 containers.
+O `npm install` roda automaticamente dentro de cada container — espere ~30 segundos.
 
-Copie o arquivo de exemplo e ajuste se necessário:
+**Verifique se está tudo funcionando:**
 
 ```bash
-cp entrega/.env.example entrega/.env
+curl -sk https://localhost:3000/gateway/health
 ```
 
-As variáveis com seus valores padrão:
+Resposta esperada — todos os serviços com `"status": "up"`:
 
-```
-JWT_SECRET=supersecret
-INTERNAL_KEY=internalkey123
-USERS_PORT=5001
-PRODUCTS_PORT=5002
-PRODUCTS_REPLICA_PORT=5012
-ORDERS_PORT=5003
-GATEWAY_PORT=3000
-```
-
-### 3. Iniciar os serviços (respeite a ordem)
-
-Cada comando em um terminal separado, a partir da pasta `entrega/`:
-
-```bash
-# Terminal 1 — Users
-node users/index.js
-
-# Terminal 2 — Products (primária)
-REPLICA_URL=http://localhost:5012 node products/index.js
-
-# Terminal 3 — Products Replica
-PORT=5012 node products-replica/index.js
-
-# Terminal 4 — Orders
-PRODUCTS_URL=http://localhost:5002 node orders/index.js
-
-# Terminal 5 — Gateway (inicia por último)
-node gateway/index.js
-```
-
-> **Windows (PowerShell):** substitua `VAR=valor node ...` por:
-> ```powershell
-> $env:REPLICA_URL="http://localhost:5012"; node products/index.js
-> ```
-
----
-
-## Execução COM Docker
-
-```bash
-cd entrega
-docker-compose up --build
-```
-
-Para rodar em segundo plano:
-
-```bash
-docker-compose up --build -d
-docker-compose logs -f gateway   # acompanha logs do gateway
-```
-
-Para parar tudo:
-
-```bash
-docker-compose down
-```
-
-Os dados são persistidos em volumes Docker nomeados (`users-data`, `products-data`, etc.) e sobrevivem ao `down`. Para apagar os dados também:
-
-```bash
-docker-compose down -v
-```
-
----
-
-## Exemplos de Uso com cURL
-
-> Todos os exemplos assumem que o Gateway está em `http://localhost:3000`.
-> Substitua pela URL direta do serviço (ex: `http://localhost:5001`) se quiser chamar sem gateway.
-
-### Registrar usuário comum
-
-```bash
-curl -s -X POST http://localhost:3000/users/register \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Alice", "email": "alice@email.com", "password": "minhasenha"}'
-```
-
-Resposta esperada `201`:
 ```json
 {
-  "id": "uuid-aqui",
-  "name": "Alice",
-  "email": "alice@email.com",
-  "role": "user"
+  "gateway": "up",
+  "services": {
+    "users":             { "status": "up", "lastCheck": "..." },
+    "products-primary":  { "status": "up", "lastCheck": "..." },
+    "products-replica":  { "status": "up", "lastCheck": "..." },
+    "orders":            { "status": "up", "lastCheck": "..." }
+  }
 }
 ```
 
+Se algum serviço aparecer como `"down"`, aguarde mais 15 segundos e tente de novo.
+
 ---
 
-### Tornar um usuário admin (desenvolvimento)
+## 2. Dashboard de monitoramento
 
-**Opção A — via endpoint de dev** (mais fácil):
+Abra o navegador e acesse:
 
-```bash
-# 1. Registre o usuário e copie o "id" da resposta
-curl -s -X POST http://localhost:3000/users/register \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Admin", "email": "admin@email.com", "password": "adminsenha"}'
-
-# 2. Promova para admin usando o id retornado
-curl -s -X POST http://localhost:3000/users/make-admin/<ID_DO_USUARIO>
+```
+https://localhost:3000/dashboard
 ```
 
-**Opção B — editando o JSON diretamente**:
+> **Importante:** acesse esse endereço digitando na barra de URL do navegador.
+> Não abra o arquivo `dashboard.html` pelo VS Code ou pelo explorador de arquivos — assim não funciona.
 
-Abra `entrega/users/data/users.json` e troque `"role": "user"` por `"role": "admin"` no registro desejado. A mudança é imediata (sem reiniciar o serviço).
+O navegador vai exibir um aviso de certificado. Clique em **Avançado → Continuar para localhost**.
+O dashboard exibe os cards de status de cada serviço e atualiza automaticamente a cada 5 segundos.
 
 ---
 
-### Login e salvar o token
+## 3. Fluxo completo de teste
+
+Cole os comandos abaixo **em sequência** no terminal Git Bash.
+
+### 3.1 Registrar usuário
 
 ```bash
-# Salva o token em variável de ambiente
-TOKEN=$(curl -s -X POST http://localhost:3000/users/login \
+curl -sk -X POST https://localhost:3000/users/register \
   -H "Content-Type: application/json" \
-  -d '{"email": "alice@email.com", "password": "minhasenha"}' \
+  -d '{"name":"Alice","email":"alice@email.com","password":"minhasenha"}'
+```
+
+Resposta esperada:
+```json
+{"id":"xxxx","name":"Alice","email":"alice@email.com","role":"user"}
+```
+
+Copie o valor do `id` — você vai usá-lo no próximo passo.
+
+---
+
+### 3.2 Promover para admin
+
+Substitua `<ID>` pelo id que você copiou:
+
+```bash
+curl -sk -X POST https://localhost:3000/users/make-admin/<ID>
+```
+
+Resposta esperada:
+```json
+{"message":"Papel atualizado para admin","user":{"role":"admin",...}}
+```
+
+---
+
+### 3.3 Login e salvar o token
+
+```bash
+TOKEN=$(curl -sk -X POST https://localhost:3000/users/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alice@email.com","password":"minhasenha"}' \
   | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
 
 echo "Token: $TOKEN"
 ```
 
-> **PowerShell:**
-> ```powershell
-> $resp = Invoke-RestMethod http://localhost:3000/users/login -Method Post `
->   -ContentType "application/json" `
->   -Body '{"email":"alice@email.com","password":"minhasenha"}'
-> $TOKEN = $resp.token
-> ```
+Deve aparecer `Token: eyJhbG...` (uma string longa). Se aparecer vazio, refaça o login.
 
 ---
 
-### Criar produto (requer token de admin)
+### 3.4 Criar produto (exige admin)
 
 ```bash
-# Faça login como admin primeiro e salve o ADMIN_TOKEN
-ADMIN_TOKEN=$(curl -s -X POST http://localhost:3000/users/login \
-  -H "Content-Type: application/json" \
-  -d '{"email": "admin@email.com", "password": "adminsenha"}' \
-  | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
-
-curl -s -X POST http://localhost:3000/products \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -d '{
-    "name": "Notebook Gamer",
-    "description": "16GB RAM, RTX 4060",
-    "price": 5500,
-    "stock": 10
-  }'
-```
-
-Resposta esperada `201`:
-```json
-{
-  "id": "uuid-do-produto",
-  "name": "Notebook Gamer",
-  "description": "16GB RAM, RTX 4060",
-  "price": 5500,
-  "stock": 10
-}
-```
-
-> Se a réplica estiver indisponível, a resposta virá com o header `X-Replica-Warning: replica sync failed` mas o produto ainda será salvo na primária.
-
----
-
-### Listar produtos
-
-```bash
-# GET sem autenticação — o gateway faz round-robin entre primária e réplica
-curl -s http://localhost:3000/products
-```
-
-Buscar produto por ID:
-
-```bash
-curl -s http://localhost:3000/products/<ID_DO_PRODUTO>
-```
-
----
-
-### Criar pedido (qualquer usuário autenticado)
-
-```bash
-curl -s -X POST http://localhost:3000/orders \
+PRODUTO=$(curl -sk -X POST https://localhost:3000/products \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{
-    "productId": "<ID_DO_PRODUTO>",
-    "quantity": 2
-  }'
+  -d '{"name":"Notebook","description":"Para estudo","price":2500,"stock":10}')
+
+echo $PRODUTO
+PROD_ID=$(echo $PRODUTO | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+echo "ID do produto: $PROD_ID"
 ```
 
-Resposta esperada `201`:
+Resposta esperada:
 ```json
-{
-  "id": "uuid-do-pedido",
-  "userId": "uuid-do-user",
-  "productId": "uuid-do-produto",
-  "quantity": 2,
-  "status": "pending",
-  "createdAt": "2026-01-01T12:00:00.000Z"
-}
+{"id":"xxxx","name":"Notebook","description":"Para estudo","price":2500,"stock":10}
 ```
 
 ---
 
-### Listar pedidos de um usuário
+### 3.5 Verificar replicação
+
+O produto deve aparecer igual nos dois arquivos:
 
 ```bash
-# Só o próprio usuário (ou admin) pode ver os pedidos
-curl -s http://localhost:3000/orders/<USER_ID> \
+echo "=== Primária ===" && docker compose exec products cat /app/data/products.json
+echo "=== Réplica ===" && docker compose exec products-replica cat /app/data/products.json
+```
+
+Os dois devem conter o mesmo produto com o mesmo `id`.
+
+---
+
+### 3.6 Listar produtos
+
+```bash
+curl -sk https://localhost:3000/products
+```
+
+A cada chamada o gateway alterna entre primária e réplica (round-robin). Para ver isso nos logs:
+
+```bash
+docker compose logs gateway | grep round-robin
+```
+
+---
+
+### 3.7 Criar pedido
+
+```bash
+curl -sk -X POST https://localhost:3000/orders \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d "{\"productId\":\"$PROD_ID\",\"quantity\":2}"
+```
+
+Resposta esperada:
+```json
+{"id":"xxxx","userId":"...","productId":"...","quantity":2,"status":"pending","createdAt":"..."}
+```
+
+---
+
+### 3.8 Listar pedidos do usuário
+
+Substitua `<USER_ID>` pelo id do passo 3.1:
+
+```bash
+curl -sk https://localhost:3000/orders/<USER_ID> \
   -H "Authorization: Bearer $TOKEN"
 ```
 
----
-
-### Consultar saúde do gateway e serviços
-
-```bash
-curl -s http://localhost:3000/gateway/health | python3 -m json.tool
-# ou
-curl -s http://localhost:3000/gateway/health | jq .
-```
-
-Resposta:
-```json
-{
-  "gateway": "up",
-  "services": {
-    "users":              { "status": "up", "lastCheck": "..." },
-    "products-primary":   { "status": "up", "lastCheck": "..." },
-    "products-replica":   { "status": "up", "lastCheck": "..." },
-    "orders":             { "status": "up", "lastCheck": "..." }
-  }
-}
-```
+Deve retornar o pedido criado no passo anterior.
 
 ---
 
-## Testando o Heartbeat (detecção de falha)
+## 4. Testando o Heartbeat (detecção de falha)
 
-O gateway verifica o `/health` de cada serviço a cada **5 segundos**. Após **2 falhas consecutivas** o serviço é marcado como `"down"` e o gateway para de rotear para ele.
+O gateway verifica cada serviço a cada **5 segundos**. Após **2 falhas consecutivas** marca o serviço como `down` e retorna `503` para quem tentar acessá-lo.
 
-### Passo a passo
+**1. Abra o log do gateway** em um terminal separado:
 
-**1. Abra o log do gateway em um terminal:**
-
-Sem Docker:
 ```bash
-# O log aparece no terminal onde o gateway está rodando
+docker compose logs -f gateway
 ```
 
-Com Docker:
+**2. Em outro terminal, derrube a réplica:**
+
 ```bash
-docker-compose logs -f gateway
+docker compose stop products-replica
 ```
 
-**2. Em outro terminal, derrube um serviço:**
+**3. Aguarde ~10 segundos.** No log aparece:
+```
+[FAILURE] products-replica marcado como DOWN em ...
+```
 
-Sem Docker — pressione `Ctrl+C` no terminal do serviço, ou:
+No dashboard o card da réplica fica vermelho.
+
+**4. Confirme via health:**
+
 ```bash
-# Linux/macOS
-kill $(lsof -ti:5012)
-
-# Windows PowerShell
-Stop-Process -Id (Get-NetTCPConnection -LocalPort 5012 -State Listen).OwningProcess -Force
+curl -sk https://localhost:3000/gateway/health
 ```
 
-Com Docker:
+**5. Leitura de produtos ainda funciona** (gateway usa só a primária):
+
 ```bash
-docker-compose stop products-replica
+curl -sk https://localhost:3000/products
 ```
 
-**3. Aguarde ~10 segundos e observe no log do gateway:**
-```
-[FAILURE] products-replica caiu em 2026-01-01T12:00:05.000Z
-```
+**6. Religue a réplica:**
 
-**4. Consulte o health para confirmar:**
 ```bash
-curl -s http://localhost:3000/gateway/health
-# "products-replica": { "status": "down", ... }
+docker compose start products-replica
 ```
 
-**5. Durante a falha, GET /products ainda funciona** (round-robin usa só a primária):
-```bash
-curl -s http://localhost:3000/products   # continua respondendo
+Após ~5 segundos no log aparece:
+```
+[RECOVERY] products-replica voltou ao ar em ...
 ```
 
-**6. Religue o serviço e veja o RECOVERY:**
-
-Com Docker:
-```bash
-docker-compose start products-replica
-```
-
-Após ~5 segundos no log:
-```
-[RECOVERY] products-replica voltou em 2026-01-01T12:00:35.000Z
-```
+No dashboard o card fica verde novamente.
 
 ---
 
-## Testando a Replicação de Produtos
+## 5. Testando falha na sincronização
 
-A escrita é **síncrona**: a primária salva → sincroniza a réplica via `POST /internal/sync` → responde ao cliente.
-
-### Passo a passo
-
-**1. Crie um produto via gateway (escrita vai para a primária):**
+**1. Derrube a réplica:**
 
 ```bash
-curl -s -X POST http://localhost:3000/products \
+docker compose stop products-replica
+```
+
+**2. Crie um produto e observe o header de aviso:**
+
+```bash
+curl -ski -X POST https://localhost:3000/products \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -d '{"name": "Mouse", "price": 80, "stock": 50}'
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"Teclado","price":120,"stock":15}'
 ```
 
-**2. Verifique o arquivo da primária:**
-
-```bash
-cat entrega/products/data/products.json
+A resposta virá com o header:
 ```
-
-**3. Verifique o arquivo da réplica — deve ter o mesmo produto:**
-
-```bash
-cat entrega/products-replica/data/products.json
-```
-
-Ambos devem conter o produto com o mesmo `id`, `name`, `price` e `stock`.
-
-**4. Consulte diretamente cada instância:**
-
-```bash
-# Primária
-curl -s http://localhost:5002/products
-
-# Réplica
-curl -s http://localhost:5012/products
-```
-
-### Testando falha na sincronização
-
-**1. Derrube a réplica antes de criar o produto.**
-
-**2. Crie o produto e observe o header de aviso:**
-
-```bash
-curl -si -X POST http://localhost:3000/products \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -d '{"name": "Teclado", "price": 120, "stock": 15}'
-```
-
-A resposta virá com:
-```
-HTTP/1.1 201 Created
 X-Replica-Warning: replica sync failed
 ```
 
-O produto estará salvo na primária, mas **não** na réplica (inconsistência temporária).
+O produto é salvo na primária, mas **não** na réplica — inconsistência temporária.
 
-**3. Religue a réplica.** Os produtos criados durante a falha não serão sincronizados automaticamente — esta é a diferença entre consistência forte e eventual.
+**3. Religue a réplica.** Os produtos criados durante a falha não são sincronizados automaticamente.
+
+```bash
+docker compose start products-replica
+```
+
+---
+
+## 6. Parar o projeto
+
+```bash
+docker compose down
+```
+
+Os dados sobrevivem ao `down` (ficam nos volumes Docker). Para apagar tudo:
+
+```bash
+docker compose down -v
+```
 
 ---
 
@@ -421,20 +311,26 @@ entrega/
 ├── .env.example
 ├── docker-compose.yml
 ├── README_execucao.md
+├── certs/                      ← Certificados TLS
+│   ├── ca.crt                  ← CA interna
+│   ├── ca.key
+│   ├── service.crt             ← Cert compartilhado entre serviços
+│   └── service.key
 ├── gateway/
-│   ├── index.js            ← Proxy + heartbeat + round-robin
+│   ├── index.js                ← Proxy + heartbeat + round-robin + TLS
+│   ├── dashboard.html          ← Dashboard de monitoramento
 │   └── package.json
 ├── users/
-│   ├── index.js            ← Registro, login, JWT, make-admin
+│   ├── index.js                ← Cadastro, login, JWT
 │   ├── middleware/auth.js
-│   ├── data/users.json     ← Persistência local
+│   ├── data/users.json
 │   └── package.json
-├── products/               ← Réplica PRIMÁRIA (porta 5002)
+├── products/                   ← Instância PRIMÁRIA (porta 5002)
 │   ├── index.js
 │   ├── middleware/auth.js
 │   ├── data/products.json
 │   └── package.json
-├── products-replica/       ← Réplica SECUNDÁRIA (porta 5012)
+├── products-replica/           ← Instância SECUNDÁRIA (porta 5012)
 │   ├── index.js
 │   ├── data/products.json
 │   └── package.json
@@ -449,15 +345,54 @@ entrega/
 
 ## Endpoints Resumidos
 
+Todos os endpoints passam pelo gateway em `https://localhost:3000`.
+
 | Método | Endpoint | Auth | Descrição |
 |--------|----------|------|-----------|
 | `POST` | `/users/register` | — | Registra novo usuário |
 | `POST` | `/users/login` | — | Retorna JWT |
 | `GET`  | `/users/:id` | Bearer (próprio ou admin) | Dados do usuário |
-| `POST` | `/users/make-admin/:id` | — | ⚠️ Dev only: promove a admin |
-| `GET`  | `/products` | — | Lista produtos (round-robin) |
+| `POST` | `/users/make-admin/:id` | — | Dev only: promove a admin |
+| `GET`  | `/products` | — | Lista produtos (round-robin entre instâncias) |
 | `GET`  | `/products/:id` | — | Produto por ID |
-| `POST` | `/products` | Bearer admin | Cria produto + sincroniza réplica |
+| `POST` | `/products` | Bearer admin | Cria produto e sincroniza réplica |
 | `POST` | `/orders` | Bearer | Cria pedido |
 | `GET`  | `/orders/:userId` | Bearer (próprio ou admin) | Lista pedidos do usuário |
-| `GET`  | `/gateway/health` | — | Status de todos os serviços |
+| `GET`  | `/gateway/health` | — | Status JSON de todos os serviços |
+| `GET`  | `/dashboard` | — | Dashboard visual (abrir no navegador) |
+
+---
+
+## Execução SEM Docker (alternativa)
+
+Instale as dependências em cada pasta de serviço:
+
+```bash
+cd entrega/users            && npm install
+cd entrega/products         && npm install
+cd entrega/products-replica && npm install
+cd entrega/orders           && npm install
+cd entrega/gateway          && npm install
+```
+
+Inicie cada serviço em um terminal separado, nesta ordem, a partir da pasta `entrega/`:
+
+```bash
+# Terminal 1
+node users/index.js
+
+# Terminal 2
+REPLICA_URL=http://localhost:5012 node products/index.js
+
+# Terminal 3
+PORT=5012 node products-replica/index.js
+
+# Terminal 4
+PRODUCTS_URL=http://localhost:5002 node orders/index.js
+
+# Terminal 5 (por último)
+node gateway/index.js
+```
+
+> Sem Docker os serviços sobem em HTTP (sem TLS) pois os certificados ficam em `/app/certs/` que só existe dentro dos containers.
+> Use `http://localhost:3000` no lugar de `https://localhost:3000` neste modo.
