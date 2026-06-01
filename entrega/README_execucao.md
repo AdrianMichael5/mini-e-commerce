@@ -34,7 +34,7 @@ Toda a comunicação interna usa **HTTPS** com certificados automáticos em `cer
 No terminal Git Bash, dentro da pasta `entrega/`:
 
 ```bash
-cd "C:/Users/ADMIN/OneDrive/Desktop/mini-e-commerce/entrega"
+cd entrega
 docker compose up -d
 ```
 
